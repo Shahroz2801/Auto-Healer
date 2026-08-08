@@ -15,7 +15,13 @@ const CATEGORY_LABELS: Record<ScanCategory, string> = {
 
 const SEVERITY_ORDER: IssueSeverity[] = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"];
 
-export function IssueList({ issues }: { issues: IssueWithFixes[] }) {
+export function IssueList({
+  issues,
+  canAutoApply = false,
+}: {
+  issues: IssueWithFixes[];
+  canAutoApply?: boolean;
+}) {
   if (issues.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
@@ -45,7 +51,7 @@ export function IssueList({ issues }: { issues: IssueWithFixes[] }) {
           </h4>
           <div className="flex flex-col gap-2">
             {categoryIssues.map((issue) => (
-              <IssueCard key={issue.id} issue={issue} />
+              <IssueCard key={issue.id} issue={issue} canAutoApply={canAutoApply} />
             ))}
           </div>
         </div>

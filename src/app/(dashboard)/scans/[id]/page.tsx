@@ -23,7 +23,7 @@ export default async function ScanDetailPage({
 
   const scan = await db.scan.findFirst({
     where: { id, project: { organizationId: org.id } },
-    include: { project: { select: { id: true, name: true } } },
+    include: { project: { select: { id: true, name: true, importMethod: true } } },
   });
   if (!scan) notFound();
 
@@ -61,7 +61,7 @@ export default async function ScanDetailPage({
           {scan.status === "COMPLETED" ? (
             <>
               <ScoreSummary scan={scan} />
-              <IssueList issues={issues} />
+              <IssueList issues={issues} canAutoApply={scan.project.importMethod === "ZIP_UPLOAD"} />
             </>
           ) : scan.status === "FAILED" ? (
             <p className="text-sm text-destructive">

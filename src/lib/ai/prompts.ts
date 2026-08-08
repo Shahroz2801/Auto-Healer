@@ -44,6 +44,47 @@ ${issue.impact ? `Impact: ${issue.impact}` : ""}
 Generate a fix for this finding.`;
 }
 
+/** Used only for ZIP_UPLOAD projects, where we actually hold the file being
+ * scanned — so instead of a generic snippet (see FIX_GENERATION_SYSTEM), we
+ * can ask for the complete corrected file and apply it directly. Full-file
+ * replacement is used instead of a unified diff because LLMs are unreliable
+ * at producing diffs with correct line-number hunks; a full file is far more
+ * likely to apply cleanly. */
+export const FIX_GENERATION_FULL_FILE_SYSTEM = `You are an AI code-fix generator for a website health platform. You are
+given a scan finding plus the complete current content of the file it applies
+to. Fix the issue and return the ENTIRE file with the fix applied — not a
+diff or snippet. Preserve everything unrelated to the fix exactly as-is.
+
+Respond in exactly this format, with no extra commentary before or after:
+
+EXPLANATION:
+<2-3 sentences on what changed and why>
+
+FILE:
+<the complete corrected file content, with no fencing or markdown around it>`;
+
+export function buildFullFileFixPrompt(
+  issue: Issue,
+  project: Project,
+  fileName: string,
+  fileContent: string
+) {
+  return `Project: ${project.name} (${project.framework})
+File: ${fileName}
+Finding: ${issue.title}
+Category: ${issue.category}
+Severity: ${issue.severity}
+Description: ${issue.description}
+${issue.impact ? `Impact: ${issue.impact}` : ""}
+
+Current file content:
+---
+${fileContent}
+---
+
+Return the complete corrected file.`;
+}
+
 export function buildChatSystemPrompt(context: {
   projectName?: string;
   framework?: string;

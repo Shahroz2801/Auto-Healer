@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireDbUser } from "@/server/services/user";
 import { db } from "@/server/db/client";
-import { explainIssue, generateFix } from "@/server/services/ai-heal";
+import { explainIssue, generateFix, applyFix } from "@/server/services/ai-heal";
 import { createChat, sendChatMessage } from "@/server/services/ai-chat";
 import { spendCredits } from "@/server/services/credits";
 import { AI_FIX_CREDIT_COST } from "@/lib/config/credits";
@@ -14,6 +14,13 @@ async function assertIssueInOrg(issueId: string, organizationId: string) {
     where: { id: issueId, scan: { project: { organizationId } } },
   });
   if (!issue) throw new Error("Issue not found.");
+}
+
+async function assertFixInOrg(fixId: string, organizationId: string) {
+  const fix = await db.fix.findFirst({
+    where: { id: fixId, issue: { scan: { project: { organizationId } } } },
+  });
+  if (!fix) throw new Error("Fix not found.");
 }
 
 export async function explainIssueAction(issueId: string) {
@@ -35,6 +42,16 @@ export async function generateFixAction(issueId: string) {
   await spendCredits(user.id, AI_FIX_CREDIT_COST, "AI_FIX", { issueId });
 
   await generateFix(issueId);
+  revalidatePath("/", "layout");
+}
+
+export async function applyFixAction(fixId: string) {
+  const user = await requireDbUser();
+  const org = user.memberships[0]?.organization;
+  if (!org) throw new Error("No workspace found for your account.");
+  await assertFixInOrg(fixId, org.id);
+
+  await applyFix(fixId);
   revalidatePath("/", "layout");
 }
 

@@ -8,6 +8,14 @@ export type ExtractedZip = {
   cleanup: () => void;
 };
 
+/** Re-packs a directory (e.g. after patching a file in it) back into a zip
+ * buffer, for re-uploading to storage. */
+export function zipDirectory(dir: string): Buffer {
+  const zip = new AdmZip();
+  zip.addLocalFolder(dir);
+  return zip.toBuffer();
+}
+
 /** Extracts a zip buffer into a fresh temp directory. Callers must call
  * `cleanup()` once done (in a `finally`) so scan workers don't leak temp
  * dirs across jobs. */

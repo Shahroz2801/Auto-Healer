@@ -146,7 +146,7 @@ export default async function ProjectDetailPage({
             {latestScan.status === "COMPLETED" ? (
               <>
                 <ScoreSummary scan={latestScan} />
-                <IssueList issues={latestIssues} />
+                <IssueList issues={latestIssues} canAutoApply={project.importMethod === "ZIP_UPLOAD"} />
               </>
             ) : latestScan.status === "FAILED" ? (
               <p className="text-sm text-destructive">

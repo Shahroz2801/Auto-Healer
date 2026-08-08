@@ -3,12 +3,12 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Sparkles, Wand2, Loader2 } from "lucide-react";
+import { Sparkles, Wand2, Loader2, CheckCircle2 } from "lucide-react";
 import type { Fix, Issue, IssueSeverity } from "@prisma/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { explainIssueAction, generateFixAction } from "@/features/ai/actions";
+import { explainIssueAction, generateFixAction, applyFixAction } from "@/features/ai/actions";
 
 export type IssueWithFixes = Issue & { fixes: Fix[] };
 
@@ -20,10 +20,17 @@ const SEVERITY_STYLES: Record<IssueSeverity, string> = {
   INFO: "border-border bg-muted/20 text-muted-foreground",
 };
 
-export function IssueCard({ issue }: { issue: IssueWithFixes }) {
+export function IssueCard({
+  issue,
+  canAutoApply = false,
+}: {
+  issue: IssueWithFixes;
+  canAutoApply?: boolean;
+}) {
   const router = useRouter();
   const [explaining, startExplain] = React.useTransition();
   const [fixing, startFix] = React.useTransition();
+  const [applying, startApply] = React.useTransition();
 
   const latestFix = issue.fixes[0];
 
@@ -46,6 +53,19 @@ export function IssueCard({ issue }: { issue: IssueWithFixes }) {
         router.refresh();
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Failed to generate fix");
+      }
+    });
+  }
+
+  function runApply() {
+    if (!latestFix) return;
+    startApply(async () => {
+      try {
+        await applyFixAction(latestFix.id);
+        toast.success("Fix applied — run a new scan to see the updated score.");
+        router.refresh();
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Failed to apply fix");
       }
     });
   }
@@ -75,11 +95,20 @@ export function IssueCard({ issue }: { issue: IssueWithFixes }) {
       {latestFix && (
         <div className="mt-2.5 space-y-1.5 rounded-md bg-background/60 p-2.5 text-xs">
           <div className="flex items-center gap-1.5 font-medium text-foreground">
-            <Wand2 className="size-3.5 text-primary" />
-            Suggested fix
+            {latestFix.status === "APPLIED" ? (
+              <>
+                <CheckCircle2 className="size-3.5 text-emerald-500" />
+                Fix applied
+              </>
+            ) : (
+              <>
+                <Wand2 className="size-3.5 text-primary" />
+                Suggested fix
+              </>
+            )}
           </div>
           <p className="text-muted-foreground">{latestFix.explanation}</p>
-          <pre className="overflow-x-auto rounded bg-muted p-2 text-[11px] whitespace-pre-wrap text-foreground">
+          <pre className="max-h-48 overflow-auto rounded bg-muted p-2 text-[11px] whitespace-pre-wrap text-foreground">
             {latestFix.diff}
           </pre>
         </div>
@@ -102,6 +131,12 @@ export function IssueCard({ issue }: { issue: IssueWithFixes }) {
           <Button size="xs" variant="outline" className="gap-1.5" disabled={fixing} onClick={runFix}>
             {fixing ? <Loader2 className="size-3 animate-spin" /> : <Wand2 className="size-3" />}
             Generate fix
+          </Button>
+        )}
+        {latestFix && latestFix.status === "GENERATED" && canAutoApply && (
+          <Button size="xs" className="gap-1.5" disabled={applying} onClick={runApply}>
+            {applying ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle2 className="size-3" />}
+            Apply fix
           </Button>
         )}
       </div>
