@@ -1,0 +1,807 @@
+// HealSite AI — Production Prisma Schema
+// Postgres + Prisma. See docs/ARCHITECTURE.md for the domain model overview.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Connection URL now lives in prisma.config.ts (Prisma 7 dropped inline
+// datasource urls in favor of driver adapters) — see src/server/db/client.ts.
+// Provider is "mysql" because the database is TiDB Cloud (MySQL wire
+// protocol compatible), accessed via @prisma/adapter-mariadb.
+datasource db {
+  provider = "mysql"
+}
+
+// ============================================================================
+// IDENTITY & TENANCY
+// ============================================================================
+
+/// A HealSite AI user. Auth identity itself is owned by Clerk; this row is the
+/// billing/ownership anchor everything else hangs off of, keyed by Clerk's user id.
+model User {
+  id          String   @id @default(cuid())
+  clerkId     String   @unique
+  email       String   @unique
+  name        String?
+  imageUrl    String?
+  role        GlobalRole @default(USER)
+  credits     Int      @default(100)
+  twoFactorEnabled Boolean @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  memberships      OrganizationMember[]
+  ownedOrgs        Organization[]        @relation("OrgOwner")
+  projects         Project[]             @relation("ProjectCreatedBy")
+  chats            Chat[]
+  notifications    Notification[]
+  auditLogs        AuditLog[]
+  apiKeys          ApiKey[]
+  creditLedger     CreditTransaction[]
+  supportTickets   SupportTicket[]
+  createdRedeemCodes  RedeemCode[] @relation("RedeemCodeCreatedBy")
+  redeemedCodes       RedeemCode[] @relation("RedeemCodeRedeemedBy")
+
+  @@index([email])
+}
+
+/// A plan-upgrade code an admin hands out manually (email/DM/etc). Redeeming
+/// one instantly sets the redeemer's org to that plan — this is the "buy a
+/// plan" path since no payment processor is connected in this deployment.
+model RedeemCode {
+  id           String    @id @default(cuid())
+  code         String    @unique
+  plan         PlanTier
+  createdById  String
+  createdBy    User      @relation("RedeemCodeCreatedBy", fields: [createdById], references: [id])
+  redeemedById String?
+  redeemedBy   User?     @relation("RedeemCodeRedeemedBy", fields: [redeemedById], references: [id])
+  redeemedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([createdById])
+  @@index([redeemedById])
+}
+
+enum GlobalRole {
+  USER
+  ADMIN
+  SUPER_ADMIN
+}
+
+/// Organizations are the billing + collaboration boundary (a "workspace" / tenant).
+/// Every project, subscription and integration belongs to exactly one organization.
+model Organization {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  imageUrl    String?
+  ownerId     String
+  owner       User     @relation("OrgOwner", fields: [ownerId], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members       OrganizationMember[]
+  projects      Project[]
+  subscription  Subscription?
+  invoices      Invoice[]
+  integrations  Integration[]
+  apiKeys       ApiKey[]
+  auditLogs     AuditLog[]
+  featureFlags  OrganizationFeatureFlag[]
+
+  @@index([slug])
+}
+
+enum OrgRole {
+  OWNER
+  ADMIN
+  EDITOR
+  VIEWER
+}
+
+model OrganizationMember {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role           OrgRole      @default(EDITOR)
+  invitedEmail   String?
+  joinedAt       DateTime     @default(now())
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+}
+
+// ============================================================================
+// PROJECTS & SOURCE IMPORT
+// ============================================================================
+
+enum ImportMethod {
+  URL
+  ZIP_UPLOAD
+  FOLDER_UPLOAD
+  GITHUB
+  GITLAB
+  BITBUCKET
+  WORDPRESS
+  SHOPIFY
+  VSCODE_EXTENSION
+  BROWSER_EXTENSION
+  FTP
+  SFTP
+  SSH
+  DOCKER
+  API
+}
+
+enum Framework {
+  HTML
+  CSS
+  JAVASCRIPT
+  TYPESCRIPT
+  REACT
+  NEXTJS
+  VUE
+  NUXT
+  ANGULAR
+  SVELTE
+  ASTRO
+  REMIX
+  NODE
+  EXPRESS
+  LARAVEL
+  PHP
+  WORDPRESS
+  SHOPIFY
+  MAGENTO
+  PYTHON
+  DJANGO
+  FLASK
+  RUBY
+  RAILS
+  JAVA
+  SPRING
+  GO
+  RUST
+  CSHARP
+  ASPNET
+  UNKNOWN
+}
+
+model Project {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdById    String
+  createdBy      User         @relation("ProjectCreatedBy", fields: [createdById], references: [id])
+
+  name           String
+  description    String?      @db.Text
+  importMethod   ImportMethod
+  sourceUrl      String?
+  framework      Framework    @default(UNKNOWN)
+  detectedStack  Json?        // dependency graph, package manager, build tool, etc.
+  healthScore    Int?         // 0-100 rollup of latest scan
+  status         ProjectStatus @default(ACTIVE)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  repository     Repository?
+  website        Website?
+  scans          Scan[]
+  chats          Chat[]
+  reports        Report[]
+  deployments    Deployment[]
+  monitors       Monitor[]
+  files          ProjectFile[]
+
+  @@index([organizationId])
+  @@index([createdById])
+}
+
+enum ProjectStatus {
+  ACTIVE
+  ARCHIVED
+  SUSPENDED
+}
+
+/// Snapshot of an imported source tree so the scanner/AI can reason over the
+/// whole project (not just crawled HTML). Large blobs live in object storage;
+/// this row indexes the tree.
+model ProjectFile {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  path      String
+  language  String?
+  sizeBytes Int
+  storageKey String  // pointer into blob storage (S3/R2/etc.)
+  sha256    String
+  createdAt DateTime @default(now())
+
+  @@unique([projectId, path])
+  @@index([projectId])
+}
+
+model Repository {
+  id            String   @id @default(cuid())
+  projectId     String   @unique
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  provider      RepoProvider
+  owner         String
+  name          String
+  defaultBranch String   @default("main")
+  installationId String? // GitHub/GitLab App installation id
+  webhookSecret String?
+  lastSyncedAt  DateTime?
+  createdAt     DateTime @default(now())
+
+  @@index([projectId])
+}
+
+enum RepoProvider {
+  GITHUB
+  GITLAB
+  BITBUCKET
+}
+
+model Website {
+  id            String   @id @default(cuid())
+  projectId     String   @unique
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  url           String
+  sslExpiresAt  DateTime?
+  lastCrawledAt DateTime?
+  pageCount     Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  @@index([projectId])
+}
+
+// ============================================================================
+// SCANNING & ISSUES
+// ============================================================================
+
+enum ScanCategory {
+  SEO
+  PERFORMANCE
+  ACCESSIBILITY
+  SECURITY
+  CODE_QUALITY
+  BEST_PRACTICES
+  BROKEN_LINKS
+  BUNDLE_SIZE
+  CORE_WEB_VITALS
+}
+
+enum ScanStatus {
+  QUEUED
+  CRAWLING
+  ANALYZING
+  AI_REVIEWING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model Scan {
+  id          String       @id @default(cuid())
+  projectId   String
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  status      ScanStatus   @default(QUEUED)
+  categories  Json         // ScanCategory[] — MySQL/TiDB has no native scalar list type
+  triggeredBy ScanTrigger  @default(MANUAL)
+
+  healthScore      Int?
+  performanceScore Int?
+  seoScore         Int?
+  accessibilityScore Int?
+  securityScore    Int?
+  bestPracticesScore Int?
+  lighthouseRaw    Json?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  errorMessage String?
+  createdAt   DateTime     @default(now())
+
+  issues      Issue[]
+  reports     Report[]
+
+  @@index([projectId])
+  @@index([status])
+}
+
+enum ScanTrigger {
+  MANUAL
+  SCHEDULED
+  WEBHOOK
+  DEPLOYMENT
+}
+
+enum IssueSeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFO
+}
+
+enum IssueStatus {
+  OPEN
+  FIX_GENERATED
+  FIX_PREVIEWED
+  FIX_APPLIED
+  FIX_REVERTED
+  IGNORED
+  RESOLVED
+}
+
+model Issue {
+  id          String        @id @default(cuid())
+  scanId      String
+  scan        Scan          @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  category    ScanCategory
+  severity    IssueSeverity
+  status      IssueStatus   @default(OPEN)
+
+  title       String
+  description String        @db.Text
+  filePath    String?
+  lineStart   Int?
+  lineEnd     Int?
+
+  impact      String?       @db.Text // human-readable explanation of user impact
+  estPerformanceGain Int?   // percentage points
+  estSeoGain         Int?   // percentage points
+
+  aiExplanation String?     @db.Text
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  fixes       Fix[]
+
+  @@index([scanId])
+  @@index([severity])
+  @@index([status])
+}
+
+enum FixStatus {
+  GENERATED
+  PREVIEWED
+  APPLIED
+  REVERTED
+  REJECTED
+}
+
+/// An AI-generated remediation for an Issue. Diffs are applied to an isolated
+/// sandbox/preview build first — never directly to the source of truth.
+model Fix {
+  id          String    @id @default(cuid())
+  issueId     String
+  issue       Issue     @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  status      FixStatus @default(GENERATED)
+
+  aiProvider  String    @default("gemini")
+  diff        String    @db.Text // unified diff
+  explanation String    @db.Text
+  filesChanged Json     // string[] — MySQL/TiDB has no native scalar list type
+
+  previewUrl  String?
+  pullRequestUrl String?
+
+  appliedAt   DateTime?
+  revertedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([issueId])
+}
+
+// ============================================================================
+// AI ASSISTANT
+// ============================================================================
+
+model Chat {
+  id        String   @id @default(cuid())
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String   @default("New chat")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages  ChatMessage[]
+
+  @@index([projectId])
+  @@index([userId])
+}
+
+enum ChatRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  chatId    String
+  chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  role      ChatRole
+  content   String   @db.Text
+  toolCalls Json?
+  aiProvider String  @default("gemini")
+  createdAt DateTime @default(now())
+
+  @@index([chatId])
+}
+
+// ============================================================================
+// REPORTS
+// ============================================================================
+
+enum ReportFormat {
+  PDF
+  DOCX
+  HTML
+  JSON
+  CSV
+}
+
+model Report {
+  id        String       @id @default(cuid())
+  projectId String
+  project   Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scanId    String?
+  scan      Scan?        @relation(fields: [scanId], references: [id])
+  format    ReportFormat
+  storageKey String
+  summary   Json         // health score, before/after, gains, screenshots
+  createdAt DateTime     @default(now())
+
+  @@index([projectId])
+}
+
+// ============================================================================
+// DEPLOYMENTS
+// ============================================================================
+
+enum DeploymentProvider {
+  VERCEL
+  NETLIFY
+  CLOUDFLARE
+  AWS
+  AZURE
+  GCP
+  RAILWAY
+  RENDER
+  DOCKER
+  FTP
+  SFTP
+  SSH
+}
+
+enum DeploymentStatus {
+  PENDING
+  BUILDING
+  DEPLOYING
+  SUCCESS
+  FAILED
+  ROLLED_BACK
+}
+
+model Deployment {
+  id         String             @id @default(cuid())
+  projectId  String
+  project    Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  provider   DeploymentProvider
+  status     DeploymentStatus   @default(PENDING)
+  url        String?
+  commitSha  String?
+  logs       String?            @db.Text
+  triggeredById String?
+  createdAt  DateTime           @default(now())
+  finishedAt DateTime?
+
+  @@index([projectId])
+}
+
+// ============================================================================
+// MONITORING
+// ============================================================================
+
+enum MonitorFrequency {
+  HOURLY
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+model Monitor {
+  id          String           @id @default(cuid())
+  projectId   String
+  project     Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  frequency   MonitorFrequency @default(DAILY)
+  categories  Json             // ScanCategory[] — MySQL/TiDB has no native scalar list type
+  isActive    Boolean          @default(true)
+  channels    Json             // { email: true, slackWebhook, discordWebhook, telegramChatId }
+  lastRunAt   DateTime?
+  nextRunAt   DateTime?
+  createdAt   DateTime         @default(now())
+
+  incidents   MonitorIncident[]
+
+  @@index([projectId])
+}
+
+enum IncidentType {
+  NEW_BUG
+  BROKEN_LINK
+  SSL_EXPIRING
+  PERFORMANCE_DROP
+  SECURITY_VULNERABILITY
+  DOWNTIME
+}
+
+enum IncidentSeverity {
+  CRITICAL
+  WARNING
+  INFO
+}
+
+model MonitorIncident {
+  id         String           @id @default(cuid())
+  monitorId  String
+  monitor    Monitor          @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  type       IncidentType
+  severity   IncidentSeverity
+  message    String
+  resolvedAt DateTime?
+  createdAt  DateTime         @default(now())
+
+  @@index([monitorId])
+}
+
+// ============================================================================
+// NOTIFICATIONS
+// ============================================================================
+
+enum NotificationType {
+  SCAN_COMPLETE
+  FIX_READY
+  INCIDENT
+  DEPLOYMENT
+  BILLING
+  SYSTEM
+}
+
+model Notification {
+  id        String            @id @default(cuid())
+  userId    String
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  body      String            @db.Text
+  href      String?
+  readAt    DateTime?
+  createdAt DateTime          @default(now())
+
+  @@index([userId])
+}
+
+// ============================================================================
+// BILLING
+// ============================================================================
+
+enum PlanTier {
+  FREE
+  STARTER
+  PRO
+  BUSINESS
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  INCOMPLETE
+}
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  organizationId       String             @unique
+  organization         Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan                 PlanTier           @default(FREE)
+  status               SubscriptionStatus @default(TRIALING)
+  stripeCustomerId     String?            @unique
+  stripeSubscriptionId String?            @unique
+  stripePriceId        String?
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean            @default(false)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+}
+
+model Invoice {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  stripeInvoiceId String      @unique
+  amountDue      Int
+  amountPaid     Int
+  currency       String       @default("usd")
+  status         String
+  hostedInvoiceUrl String?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId])
+}
+
+enum CreditTransactionType {
+  SCAN
+  AI_FIX
+  AI_CHAT
+  REPORT
+  PURCHASE
+  MONTHLY_GRANT
+  REFUND
+  ADMIN_ADJUSTMENT
+}
+
+model CreditTransaction {
+  id        String                 @id @default(cuid())
+  userId    String
+  user      User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      CreditTransactionType
+  amount    Int                    // negative for spend, positive for grant
+  balanceAfter Int
+  metadata  Json?
+  createdAt DateTime               @default(now())
+
+  @@index([userId])
+}
+
+// ============================================================================
+// INTEGRATIONS & PLUGINS
+// ============================================================================
+
+enum IntegrationProvider {
+  GITHUB
+  GITLAB
+  BITBUCKET
+  GOOGLE_ANALYTICS
+  GOOGLE_SEARCH_CONSOLE
+  CLOUDFLARE
+  PAGESPEED
+  AHREFS
+  SEMRUSH
+  STRIPE
+  SLACK
+  DISCORD
+  TELEGRAM
+}
+
+model Integration {
+  id             String              @id @default(cuid())
+  organizationId String
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  provider       IntegrationProvider
+  encryptedCredentials String        @db.Text // AES-256-GCM encrypted blob
+  metadata       Json?
+  connectedAt    DateTime            @default(now())
+  isActive       Boolean             @default(true)
+
+  @@unique([organizationId, provider])
+  @@index([organizationId])
+}
+
+enum PluginPlatform {
+  WORDPRESS
+  SHOPIFY
+  VSCODE
+  CHROME
+  FIREFOX
+  EDGE
+  CLI
+  GITHUB_ACTION
+  GITLAB_CI
+}
+
+model Plugin {
+  id          String         @id @default(cuid())
+  slug        String         @unique
+  name        String
+  description String
+  platform    PluginPlatform
+  version     String
+  iconUrl     String?
+  isPublished Boolean        @default(false)
+  downloads   Int            @default(0)
+  createdAt   DateTime       @default(now())
+
+  installs    PluginInstall[]
+}
+
+model PluginInstall {
+  id             String   @id @default(cuid())
+  pluginId       String
+  plugin         Plugin   @relation(fields: [pluginId], references: [id], onDelete: Cascade)
+  organizationId String
+  installedAt    DateTime @default(now())
+
+  @@unique([pluginId, organizationId])
+}
+
+// ============================================================================
+// PLATFORM: API KEYS, FEATURE FLAGS, AUDIT LOG, SUPPORT
+// ============================================================================
+
+model ApiKey {
+  id             String        @id @default(cuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User          @relation(fields: [userId], references: [id])
+  name           String
+  keyPrefix      String        // first chars shown in UI, e.g. hsk_live_xxx
+  hashedKey      String        @unique
+  scopes         Json          // string[] — MySQL/TiDB has no native scalar list type
+  lastUsedAt     DateTime?
+  expiresAt      DateTime?
+  createdAt      DateTime      @default(now())
+
+  @@index([organizationId])
+}
+
+model OrganizationFeatureFlag {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  key            String
+  enabled        Boolean      @default(false)
+
+  @@unique([organizationId, key])
+}
+
+model AuditLog {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String?
+  user           User?         @relation(fields: [userId], references: [id])
+  action         String        // e.g. "project.deleted", "fix.applied"
+  targetType     String?
+  targetId       String?
+  ipAddress      String?
+  metadata       Json?
+  createdAt      DateTime      @default(now())
+
+  @@index([organizationId])
+  @@index([userId])
+  @@index([action])
+}
+
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+model SupportTicket {
+  id        String               @id @default(cuid())
+  userId    String
+  user      User                 @relation(fields: [userId], references: [id])
+  subject   String
+  body      String               @db.Text
+  status    SupportTicketStatus  @default(OPEN)
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+
+  @@index([userId])
+}
