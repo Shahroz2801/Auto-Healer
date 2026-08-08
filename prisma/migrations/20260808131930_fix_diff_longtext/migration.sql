@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE `Fix` MODIFY `diff` LONGTEXT NOT NULL;

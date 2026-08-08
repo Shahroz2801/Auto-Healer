@@ -92,13 +92,24 @@ export async function generateFix(issueId: string) {
         temperature: 0.2,
       });
       const { explanation, content } = parseFullFileFixResponse(raw);
+      const fixedContent = content || raw;
+
+      // Guard against LLM repetition/hallucination loops producing a
+      // runaway response — a legitimate fixed file shouldn't be wildly
+      // larger than the original.
+      const maxLength = Math.max(fileContent.length * 4, 20_000);
+      if (fixedContent.length > maxLength) {
+        throw new Error(
+          "The AI's response looked malformed (too large) — try generating the fix again."
+        );
+      }
 
       const fix = await db.fix.create({
         data: {
           issueId,
           status: "GENERATED",
           aiProvider: aiProvider.name,
-          diff: content || raw,
+          diff: fixedContent,
           explanation,
           filesChanged: [entry],
         },

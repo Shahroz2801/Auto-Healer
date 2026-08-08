@@ -386,7 +386,7 @@ model Fix {
   status      FixStatus @default(GENERATED)
 
   aiProvider  String    @default("gemini")
-  diff        String    @db.Text // unified diff
+  diff        String    @db.LongText // unified diff, or full file content for ZIP_UPLOAD fixes
   explanation String    @db.Text
   filesChanged Json     // string[] — MySQL/TiDB has no native scalar list type
 
