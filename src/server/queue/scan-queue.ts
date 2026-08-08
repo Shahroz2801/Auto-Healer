@@ -4,7 +4,6 @@ import { redisConnection } from "./connection";
 export type ScanJobData = {
   scanId: string;
   projectId: string;
-  url: string;
 };
 
 export const SCAN_QUEUE_NAME = "scans";

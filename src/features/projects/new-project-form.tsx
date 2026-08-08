@@ -36,9 +36,13 @@ function SubmitButton() {
   );
 }
 
+const MAX_ZIP_SIZE_MB = 25;
+
 export function NewProjectForm({ errorMessage }: { errorMessage?: string }) {
   const [importMethod, setImportMethod] = React.useState<string>("URL");
+  const [zipFileName, setZipFileName] = React.useState<string | null>(null);
   const showSourceUrl = importMethod !== "ZIP_UPLOAD";
+  const showZipUpload = importMethod === "ZIP_UPLOAD";
 
   return (
     <form action={createProjectAction} className="flex flex-col gap-5">
@@ -76,6 +80,24 @@ export function NewProjectForm({ errorMessage }: { errorMessage?: string }) {
             type="url"
             placeholder="https://example.com"
           />
+        </div>
+      )}
+
+      {showZipUpload && (
+        <div className="space-y-1.5">
+          <Label htmlFor="zipFile">Site archive (.zip)</Label>
+          <Input
+            id="zipFile"
+            name="zipFile"
+            type="file"
+            accept=".zip,application/zip"
+            required
+            onChange={(e) => setZipFileName(e.target.files?.[0]?.name ?? null)}
+          />
+          <p className="text-xs text-muted-foreground">
+            Zip your site&apos;s static files (must include an index.html) — up to {MAX_ZIP_SIZE_MB}MB.
+            {zipFileName && <span className="block mt-1 text-foreground">{zipFileName}</span>}
+          </p>
         </div>
       )}
 

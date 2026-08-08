@@ -11,7 +11,7 @@ import { runScanJob } from "@/server/services/scan-runner";
 const worker = new Worker<ScanJobData>(
   SCAN_QUEUE_NAME,
   async (job) => {
-    console.log(`[scan-worker] starting scan ${job.data.scanId} for ${job.data.url}`);
+    console.log(`[scan-worker] starting scan ${job.data.scanId} (project ${job.data.projectId})`);
     const result = await runScanJob(job.data);
     console.log(
       `[scan-worker] finished scan ${job.data.scanId}: health=${result.healthScore} issues=${result.findings.length}`

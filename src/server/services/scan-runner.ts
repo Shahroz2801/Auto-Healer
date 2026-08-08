@@ -1,6 +1,41 @@
 import { db } from "@/server/db/client";
 import { runScan } from "@/lib/scanners";
+import { downloadObject } from "@/server/storage/r2";
+import { extractZip } from "@/lib/zip/extract";
+import { findEntryFile, serveStaticDir } from "@/lib/zip/static-server";
 import type { ScanJobData } from "@/server/queue/scan-queue";
+
+/** ZIP_UPLOAD projects have no live URL to fetch — instead, unzip the
+ * uploaded archive and serve it from a local static server so the existing
+ * fetch-based scanner pipeline (built for real URLs) can run against it
+ * unchanged, rather than maintaining a second static-analysis engine. */
+async function runZipScan(projectId: string) {
+  const projectFile = await db.projectFile.findUnique({
+    where: { projectId_path: { projectId, path: "source.zip" } },
+  });
+  if (!projectFile) {
+    throw new Error("No uploaded zip found for this project.");
+  }
+
+  const buffer = await downloadObject(projectFile.storageKey);
+  const { dir, cleanup } = extractZip(buffer);
+
+  try {
+    const entry = await findEntryFile(dir);
+    if (!entry) {
+      throw new Error("Couldn't find an index.html in the uploaded zip.");
+    }
+
+    const { url, close } = await serveStaticDir(dir);
+    try {
+      return await runScan(`${url}/${entry}`);
+    } finally {
+      await close();
+    }
+  } finally {
+    cleanup();
+  }
+}
 
 /** Executes a scan job end-to-end: crawl + analyze, persist Issues, roll the
  * scores up onto the Scan and Project rows, notify the owner. Called from
@@ -8,7 +43,7 @@ import type { ScanJobData } from "@/server/queue/scan-queue";
  * the worker file so it can also be invoked directly (tests, `db:seed`-style
  * scripts) without spinning up a queue.
  */
-export async function runScanJob({ scanId, projectId, url }: ScanJobData) {
+export async function runScanJob({ scanId, projectId }: ScanJobData) {
   await db.scan.update({
     where: { id: scanId },
     data: { status: "CRAWLING", startedAt: new Date() },
@@ -17,7 +52,15 @@ export async function runScanJob({ scanId, projectId, url }: ScanJobData) {
   try {
     await db.scan.update({ where: { id: scanId }, data: { status: "ANALYZING" } });
 
-    const result = await runScan(url);
+    const project = await db.project.findUniqueOrThrow({
+      where: { id: projectId },
+      select: { importMethod: true, sourceUrl: true, name: true, createdById: true },
+    });
+
+    const result =
+      project.importMethod === "ZIP_UPLOAD"
+        ? await runZipScan(projectId)
+        : await runScan(project.sourceUrl!);
 
     await db.$transaction([
       db.issue.createMany({
@@ -51,24 +94,18 @@ export async function runScanJob({ scanId, projectId, url }: ScanJobData) {
       }),
     ]);
 
-    const project = await db.project.findUnique({
-      where: { id: projectId },
-      select: { name: true, createdById: true },
+    const critical = result.findings.filter(
+      (f) => f.severity === "CRITICAL" || f.severity === "HIGH"
+    ).length;
+    await db.notification.create({
+      data: {
+        userId: project.createdById,
+        type: "SCAN_COMPLETE",
+        title: `Scan complete: ${project.name}`,
+        body: `Health score ${result.healthScore}/100 — ${result.findings.length} issue(s) found${critical > 0 ? ` (${critical} high priority)` : ""}.`,
+        href: `/projects/${projectId}`,
+      },
     });
-    if (project) {
-      const critical = result.findings.filter(
-        (f) => f.severity === "CRITICAL" || f.severity === "HIGH"
-      ).length;
-      await db.notification.create({
-        data: {
-          userId: project.createdById,
-          type: "SCAN_COMPLETE",
-          title: `Scan complete: ${project.name}`,
-          body: `Health score ${result.healthScore}/100 — ${result.findings.length} issue(s) found${critical > 0 ? ` (${critical} high priority)` : ""}.`,
-          href: `/projects/${projectId}`,
-        },
-      });
-    }
 
     return result;
   } catch (error) {

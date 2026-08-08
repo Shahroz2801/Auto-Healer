@@ -7,6 +7,13 @@ const nextConfig: NextConfig = {
   // can't statically resolve them for bundling, so keep them external
   // instead of silently mis-bundling.
   serverExternalPackages: ["bullmq", "mariadb"],
+  experimental: {
+    serverActions: {
+      // Zip project uploads (new-project-form.tsx) go through this same
+      // server action path; default 1MB limit is far too small for those.
+      bodySizeLimit: "25mb",
+    },
+  },
 };
 
 export default nextConfig;

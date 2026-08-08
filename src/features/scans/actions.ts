@@ -20,7 +20,7 @@ export async function runScanAction(projectId: string) {
     where: { id: projectId, organizationId: org.id },
   });
   if (!project) throw new Error("Project not found.");
-  if (!project.sourceUrl) {
+  if (project.importMethod !== "ZIP_UPLOAD" && !project.sourceUrl) {
     throw new Error("This project has no source URL to scan yet.");
   }
 
@@ -35,7 +35,7 @@ export async function runScanAction(projectId: string) {
 
   await spendCredits(user.id, SCAN_CREDIT_COST, "SCAN", { scanId: scan.id, projectId });
 
-  await enqueueScan({ scanId: scan.id, projectId, url: project.sourceUrl });
+  await enqueueScan({ scanId: scan.id, projectId });
 
   revalidatePath(`/projects/${projectId}`);
   revalidatePath("/scans");
