@@ -71,7 +71,12 @@ export default async function ProjectDetailPage({
               Ask AI
             </Button>
           </form>
-          <RunScanButton projectId={project.id} disabled={!project.sourceUrl || !latestIsTerminal} />
+          <RunScanButton
+            projectId={project.id}
+            disabled={
+              (project.importMethod !== "ZIP_UPLOAD" && !project.sourceUrl) || !latestIsTerminal
+            }
+          />
           <DeleteProjectButton projectId={project.id} projectName={project.name} />
         </div>
       </div>
