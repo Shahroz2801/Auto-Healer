@@ -305,7 +305,7 @@ model Scan {
 
   startedAt   DateTime?
   completedAt DateTime?
-  errorMessage String?
+  errorMessage String?     @db.Text
   createdAt   DateTime     @default(now())
 
   issues      Issue[]

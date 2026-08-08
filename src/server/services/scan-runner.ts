@@ -92,7 +92,7 @@ export async function runScanJob({ scanId, projectId }: ScanJobData) {
         where: { id: projectId },
         data: { healthScore: result.healthScore },
       }),
-    ]);
+    ], { timeout: 20_000 });
 
     const critical = result.findings.filter(
       (f) => f.severity === "CRITICAL" || f.severity === "HIGH"
@@ -114,7 +114,7 @@ export async function runScanJob({ scanId, projectId }: ScanJobData) {
       data: {
         status: "FAILED",
         completedAt: new Date(),
-        errorMessage: error instanceof Error ? error.message : "Unknown error",
+        errorMessage: (error instanceof Error ? error.message : "Unknown error").slice(0, 2000),
       },
     });
     throw error;
